@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>OxP2P Chat</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<style>
+:root{--bg:#10151c;--panel:#18202b;--line:#2a3646;--ink:#e8edf3;--mute:#8a98a9;--acc:#3ddc97;--me:#16443a;--them:#222d3b;--warn:#ff8a65}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.4 "Trebuchet MS",system-ui,sans-serif;display:flex;flex-direction:column;max-width:720px;margin:0 auto;padding:env(safe-area-inset-top) 12px env(safe-area-inset-bottom)}
+header{display:flex;align-items:center;gap:8px;padding:10px 0;flex-wrap:wrap}
+h1{font-size:1.15rem;margin:0;flex:1;letter-spacing:.2px}
+#status{font-size:.85rem;color:var(--mute);width:100%}
+#status.ok{color:var(--acc)}
+button{font:inherit;font-weight:700;background:var(--acc);color:#07281b;border:0;border-radius:10px;padding:10px 14px;min-height:44px;cursor:pointer}
+button.alt{background:var(--panel);color:var(--ink);border:1px solid var(--line)}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+#msgs{flex:1;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:6px;min-height:0}
+.m{max-width:85%;padding:8px 12px;border-radius:14px;word-break:break-word;background:var(--them)}
+.m.me{align-self:flex-end;background:var(--me)}
+.m.sys{align-self:center;background:none;color:var(--mute);font-size:.85rem}
+.m b{display:block;font-size:.75rem;color:var(--acc);font-weight:700}
+.m img{max-width:100%;max-height:260px;border-radius:8px;display:block;cursor:pointer}
+.m a{color:var(--acc)}
+.bar{display:flex;flex-wrap:wrap;gap:6px;padding:10px 0}
+.bar input[type=text]{flex:1 1 100%;min-width:0;font:inherit;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:10px}
+#pair,#scan{position:fixed;inset:0;background:var(--bg);z-index:5;overflow-y:auto;padding:calc(env(safe-area-inset-top) + 12px) 14px 20px;display:none}
+#pair .in,#scan .in{max-width:720px;margin:0 auto}
+#qrwrap{background:#fff;border-radius:12px;padding:12px;text-align:center;margin:10px 0}
+#qr{width:100%;max-width:300px;height:auto;image-rendering:pixelated}
+textarea{width:100%;height:80px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:8px;font-size:11px;word-break:break-all}
+video{width:100%;border-radius:12px;background:#000}
+.hint{color:var(--mute);font-size:.9rem;margin:6px 0}
+.tick{font-size:.7rem;color:var(--mute);margin-left:8px}
+button.rec{background:var(--warn);color:#200}
+audio{max-width:100%;height:40px}
+</style>
+</head>
+<body>
+<header>
+  <h1>OxP2P Chat</h1>
+  <button class="alt" id="nameBtn">Mon nom</button>
+  <button class="alt" id="keyBtn">Chiffrement</button>
+  <button id="hostBtn">Inviter</button>
+  <button class="alt" id="joinBtn">Rejoindre</button>
+  <div id="status">Aucun contact connecté. Touchez « Inviter » ou « Rejoindre ».</div>
+</header>
+<div id="msgs"></div>
+<div class="bar">
+  <input type="text" id="txt" placeholder="Votre message" autocomplete="off">
+  <button class="alt" id="fileBtn" aria-label="Envoyer un fichier">Fichier</button>
+  <button class="alt" id="photoBtn" aria-label="Prendre une photo">Photo</button>
+  <button class="alt" id="micBtn" aria-label="Message vocal">Voix</button>
+  <button id="sendBtn">Envoyer</button>
+</div>
+<input type="file" id="fileIn" hidden>
+<input type="file" id="photoIn" accept="image/*" capture="environment" hidden>
+
+<div id="pair"><div class="in">
+  <h2 id="pairTitle"></h2>
+  <p class="hint" id="pairHint"></p>
+  <div id="qrwrap"><canvas id="qr"></canvas><div class="hint" id="qrInfo" style="color:#333"></div></div>
+  <button class="alt" id="qrPause">Pause</button>
+  <div id="hostStep" style="display:none">
+    <p class="hint">Quand l'autre appareil affiche sa réponse :</p>
+    <button id="scanReply">Scanner la réponse</button>
+  </div>
+  <p class="hint">Sans caméra : copiez le code, ou collez la réponse ici.</p>
+  <textarea id="code" placeholder="Code"></textarea>
+  <button class="alt" id="copyBtn">Copier le code</button>
+  <button class="alt" id="pasteBtn" style="display:none">Valider la réponse collée</button>
+  <p><button class="alt" id="pairClose">Fermer</button></p>
+</div></div>
+
+<div id="scan"><div class="in">
+  <p class="hint" id="scanProg">Visez le QR code. S'il y a plusieurs images, laissez la caméra dessus.</p>
+  <video id="vid" playsinline muted></video>
+  <p><button class="alt" id="scanCancel">Annuler</button></p>
+</div></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const CFG={iceServers:[{urls:'stun:stun.l.google.com:19302'}]};
+const peers={}; let pend=null, me=(()=>{try{return localStorage.getItem('oxp_name')}catch{return null}})()||('Invité'+Math.floor(Math.random()*900+100));
+const inc={}; const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+/* ---------- messages & historique ---------- */
+function hist(m){try{const h=JSON.parse(localStorage.getItem('oxp_h')||'[]');h.push(m);localStorage.setItem('oxp_h',JSON.stringify(h.slice(-200)))}catch{}}
+function add(cls,from,text,node,save){
+  const d=document.createElement('div');d.className='m '+cls;
+  if(from&&cls!=='me'){const b=document.createElement('b');b.textContent=from;d.appendChild(b)}
+  if(node)d.appendChild(node);
+  if(text){const s=document.createElement('span');s.textContent=text;d.appendChild(s)}
+  $('msgs').appendChild(d);$('msgs').scrollTop=1e9;
+  if(save&&text&&!node)hist({cls,from,text});
+  return d;
+}
+try{JSON.parse(localStorage.getItem('oxp_h')||'[]').forEach(m=>add(m.cls,m.from,m.text))}catch{}
+
+/* ---------- codes d'appairage (SDP compressé) ---------- */
+const b64=u=>btoa(String.fromCharCode(...u));
+const unb64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+async function pack(d){
+  const s=JSON.stringify({t:d.type,s:d.sdp});
+  if(window.CompressionStream){
+    const st=new Blob([s]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+    return 'z'+b64(new Uint8Array(await new Response(st).arrayBuffer()));
+  }
+  return 'p'+btoa(unescape(encodeURIComponent(s)));
+}
+async function unpack(c){
+  c=c.trim();let s;
+  if(c[0]==='z'){
+    const st=new Blob([unb64(c.slice(1))]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    s=await new Response(st).text();
+  }else s=decodeURIComponent(escape(atob(c.slice(1))));
+  const o=JSON.parse(s);return{type:o.t,sdp:o.s};
+}
+const iceDone=pc=>new Promise(r=>{
+  if(pc.iceGatheringState==='complete')return r();
+  pc.addEventListener('icegatheringstatechange',()=>pc.iceGatheringState==='complete'&&r());
+  setTimeout(r,4000);
+});
+
+/* ---------- QR animé ---------- */
+let qrTimer=null,frames=[],fi=0,paused=false;
+function drawQR(text){
+  const q=qrcode(0,'L');q.addData(text);q.make();
+  const n=q.getModuleCount(),px=6,m=4,sz=(n+2*m)*px,cv=$('qr');
+  cv.width=cv.height=sz;const x=cv.getContext('2d');
+  x.fillStyle='#fff';x.fillRect(0,0,sz,sz);x.fillStyle='#000';
+  for(let r=0;r<n;r++)for(let c=0;c<n;c++)if(q.isDark(r,c))x.fillRect((c+m)*px,(r+m)*px,px,px);
+}
+function showCode(code){
+  const SZ=280,n=Math.ceil(code.length/SZ);frames=[];
+  for(let i=0;i<n;i++)frames.push(i+'|'+n+'|'+code.substr(i*SZ,SZ));
+  $('code').value=code;fi=0;paused=false;$('qrPause').textContent='Pause';
+  const step=()=>{drawQR(frames[fi]);$('qrInfo').textContent='Image '+(fi+1)+' sur '+n;if(!paused)fi=(fi+1)%n};
+  step();clearInterval(qrTimer);if(n>1)qrTimer=setInterval(step,900);
+}
+$('qrPause').onclick=()=>{paused=!paused;$('qrPause').textContent=paused?'Reprendre':'Pause'};
+function openPair(title,hint,host){
+  $('pairTitle').textContent=title;$('pairHint').textContent=hint;
+  $('hostStep').style.display=host?'block':'none';$('pasteBtn').style.display=host?'inline-block':'none';
+  $('code').readOnly=!host;$('code').value='';$('qrInfo').textContent='Préparation…';
+  $('pair').style.display='block';
+}
+function closePair(){$('pair').style.display='none';clearInterval(qrTimer)}
+$('pairClose').onclick=closePair;
+$('copyBtn').onclick=()=>{$('code').select();navigator.clipboard&&navigator.clipboard.writeText($('code').value)};
+
+/* ---------- scanner ---------- */
+let stream=null;
+function stopScan(){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;$('scan').style.display='none'}
+$('scanCancel').onclick=stopScan;
+async function scan(cb){
+  const got={};let total=0;
+  try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}})}
+  catch{alert("Caméra indisponible ou refusée. Utilisez le code à copier-coller.");return}
+  $('scan').style.display='block';$('vid').srcObject=stream;await $('vid').play();
+  const cv=document.createElement('canvas'),x=cv.getContext('2d',{willReadFrequently:true});
+  const tick=()=>{
+    if(!stream)return;const v=$('vid');
+    if(v.readyState===v.HAVE_ENOUGH_DATA){
+      cv.width=v.videoWidth;cv.height=v.videoHeight;x.drawImage(v,0,0);
+      const r=jsQR(x.getImageData(0,0,cv.width,cv.height).data,cv.width,cv.height);
+      if(r){
+        const a=r.data.split('|');
+        if(a.length>=3&&!isNaN(a[0])){
+          total=+a[1];got[+a[0]]=r.data.slice(a[0].length+a[1].length+2);
+          $('scanProg').textContent='Images lues : '+Object.keys(got).length+' sur '+total;
+          if(Object.keys(got).length===total){
+            const all=Array.from({length:total},(_,i)=>got[i]).join('');
+            stopScan();cb(all);return;
+          }
+        }
+      }
+    }
+    requestAnimationFrame(tick);
+  };
+  tick();
+}
+
+/* ---------- WebRTC ---------- */
+function status(){
+  const n=Object.values(peers).filter(p=>p.ch&&p.ch.readyState==='open').length;
+  $('status').textContent=n?('Connecté à '+n+' contact'+(n>1?'s':'')):'Aucun contact connecté.';
+  $('status').className=n?'ok':'';
+}
+function wire(id,pc,ch){
+  peers[id]={pc,ch};
+  ch.onopen=async()=>{status();closePair();stopScan();ch.send(await enc(JSON.stringify({t:'hello',n:me})))};
+  ch.onmessage=e=>{const p=peers[id];p.q=(p.q||Promise.resolve()).then(()=>onData(id,e.data))};
+  ch.onclose=()=>{delete peers[id];status()};
+}
+const openChs=ex=>Object.entries(peers).filter(([k,p])=>k!==ex&&p.ch&&p.ch.readyState==='open').map(([,p])=>p.ch);
+const bcast=(s,ex)=>openChs(ex).forEach(c=>c.send(s));
+
+$('hostBtn').onclick=async()=>{
+  openPair("Inviter quelqu'un","Montrez ces QR codes à l'autre appareil (bouton « Rejoindre »), puis scannez sa réponse.",true);
+  const pc=new RTCPeerConnection(CFG),id='p'+Date.now(),ch=pc.createDataChannel('chat');
+  wire(id,pc,ch);pend=pc;
+  await pc.setLocalDescription(await pc.createOffer());await iceDone(pc);
+  showCode(await pack(pc.localDescription));
+};
+async function accept(code){
+  try{
+    if(!pend)throw 0;
+    await pend.setRemoteDescription(await unpack(code));
+    $('qrInfo').textContent='Connexion en cours…';
+  }catch{alert('Réponse illisible. Recommencez le scan ou le collage.')}
+}
+$('scanReply').onclick=()=>scan(accept);
+$('pasteBtn').onclick=()=>accept($('code').value);
+
+$('joinBtn').onclick=()=>scan(async code=>{
+  try{
+    const offer=await unpack(code);
+    openPair('Rejoindre',"Montrez ces QR codes à l'appareil qui vous a invité : il doit scanner votre réponse.",false);
+    const pc=new RTCPeerConnection(CFG),id='p'+Date.now();
+    pc.ondatachannel=e=>wire(id,pc,e.channel);
+    await pc.setRemoteDescription(offer);
+    await pc.setLocalDescription(await pc.createAnswer());await iceDone(pc);
+    showCode(await pack(pc.localDescription));
+  }catch{closePair();alert("Invitation illisible. Scannez de nouveau.")}
+});
+
+/* ---------- réception ---------- */
+async function onData(pid,raw){
+  bcast(raw,pid); // relais : tous les pairs se voient entre eux
+  const s=await dec(raw);if(s===null)return;
+  let m;try{m=JSON.parse(s)}catch{return}
+  if(m.t==='hello')add('sys','',m.n+' a rejoint le chat');
+  else if(m.t==='msg'){add('them',m.n,m.x,null,true);out({t:'ack',id:m.id})}
+  else if(m.t==='ack'){const t=ticks[m.id];if(t){t.n++;t.el.textContent='✓✓'+(t.n>1?' '+t.n:'')}}
+  else if(m.t==='fs')inc[m.id]={m,parts:[],got:0};
+  else if(m.t==='fc'){
+    const f=inc[m.id];if(!f)return;
+    f.parts[m.i]=unb64(m.d);
+    if(++f.got===f.m.k){
+      const url=URL.createObjectURL(new Blob(f.parts,{type:f.m.mime}));
+      showFile('them',f.m.n,f.m.name,f.m.mime,url);delete inc[m.id];
+    }
+  }
+}
+function showFile(cls,from,name,mime,url){
+  let node;
+  if(mime.startsWith('audio/')){node=document.createElement('audio');node.controls=true;node.src=url}
+  else if(mime.startsWith('image/')){node=new Image();node.src=url;node.onclick=()=>window.open(url)}
+  else{node=document.createElement('a');node.href=url;node.download=name;node.textContent='Fichier : '+name+' (toucher pour enregistrer)'}
+  add(cls,from,'',node);
+}
+
+/* ---------- envoi ---------- */
+/* ---------- chiffrement de bout en bout (phrase secrète) ---------- */
+const ticks={};let key=null;
+async function setPass(p){
+  if(!p){key=null;return}
+  const base=await crypto.subtle.importKey('raw',new TextEncoder().encode(p),'PBKDF2',false,['deriveKey']);
+  key=await crypto.subtle.deriveKey({name:'PBKDF2',salt:new TextEncoder().encode('oxp2p-v1'),iterations:150000,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+}
+async function enc(s){
+  if(!key)return s;
+  const iv=crypto.getRandomValues(new Uint8Array(12));
+  const c=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,new TextEncoder().encode(s)));
+  return JSON.stringify({e:1,iv:b64(iv),c:b64(c)});
+}
+async function dec(raw){ // null = message illisible ou non chiffré alors qu'une clé est active
+  let o;try{o=JSON.parse(raw)}catch{return null}
+  if(!o.e)return key?null:raw;
+  if(!key)return null;
+  try{return new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(o.iv)},key,unb64(o.c)))}catch{return null}
+}
+async function out(o){bcast(await enc(JSON.stringify(o)))}
+$('keyBtn').onclick=async()=>{
+  const p=prompt("Phrase secrète commune (vide = désactiver). Tous les participants doivent saisir la même.");
+  if(p===null)return;
+  if(!window.crypto||!crypto.subtle){alert("Chiffrement indisponible : ouvrez la page en HTTPS ou depuis un fichier local.");return}
+  await setPass(p.trim());
+  $('keyBtn').textContent=key?'Chiffré 🔒':'Chiffrement';
+  add('sys','',key?'Chiffrement activé. Les messages avec une autre phrase seront ignorés.':'Chiffrement désactivé.');
+};
+
+/* ---------- messages vocaux ---------- */
+let rec=null,chunks=[];
+$('micBtn').onclick=async()=>{
+  if(rec){rec.stop();return}
+  if(!openChs().length){alert("Aucun contact connecté.");return}
+  let st;try{st=await navigator.mediaDevices.getUserMedia({audio:true})}catch{alert('Micro indisponible ou refusé.');return}
+  rec=new MediaRecorder(st);chunks=[];
+  rec.ondataavailable=e=>chunks.push(e.data);
+  rec.onstop=()=>{
+    st.getTracks().forEach(t=>t.stop());
+    const type=rec.mimeType||'audio/webm';rec=null;
+    $('micBtn').textContent='Voix';$('micBtn').classList.remove('rec');
+    sendFile(new File([new Blob(chunks,{type})],'vocal.'+(type.includes('mp4')?'m4a':'webm'),{type}));
+  };
+  rec.start();$('micBtn').textContent='Stop';$('micBtn').classList.add('rec');
+};
+
+function sendText(){
+  const v=$('txt').value.trim();if(!v)return;
+  if(!openChs().length){alert("Aucun contact connecté.");return}
+  const id='m'+Date.now()+Math.random().toString(36).slice(2,6);
+  out({t:'msg',id,n:me,x:v});
+  const d=add('me','',v,null,true),el=document.createElement('span');
+  el.className='tick';el.textContent='✓';d.appendChild(el);ticks[id]={el,n:0};$('txt').value='';
+}
+async function sendFile(f){
+  if(!openChs().length){alert("Aucun contact connecté.");return}
+  if(f.size>15*1048576){alert('Fichier trop lourd : 15 Mo maximum.');return}
+  const id='f'+Date.now(),SZ=12000,buf=new Uint8Array(await f.arrayBuffer()),k=Math.max(1,Math.ceil(buf.length/SZ));
+  const mime=f.type||'application/octet-stream';
+  await out({t:'fs',id,k,n:me,name:f.name,mime});
+  for(let i=0;i<k;i++){
+    while(openChs().some(c=>c.bufferedAmount>1e6))await sleep(30);
+    await out({t:'fc',id,i,d:b64(buf.subarray(i*SZ,(i+1)*SZ))});
+  }
+  showFile('me','',f.name,mime,URL.createObjectURL(f));
+}
+$('sendBtn').onclick=sendText;
+$('txt').addEventListener('keydown',e=>{if(e.key==='Enter')sendText()});
+$('fileBtn').onclick=()=>$('fileIn').click();
+$('photoBtn').onclick=()=>$('photoIn').click();
+for(const i of ['fileIn','photoIn'])$(i).onchange=e=>{if(e.target.files[0])sendFile(e.target.files[0]);e.target.value=''};
+$('nameBtn').onclick=()=>{const n=prompt('Votre nom :',me);if(n&&n.trim()){me=n.trim().slice(0,24);try{localStorage.setItem('oxp_name',me)}catch{}}};
+addEventListener('keydown',e=>{if(e.key==='Escape'){stopScan();closePair()}});
+</script>
+</body>
+</html>
